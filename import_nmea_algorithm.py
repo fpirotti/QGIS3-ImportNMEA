@@ -30,18 +30,12 @@ __copyright__ = '(C) 2021 by Francesco Pirotti, University of Padova'
 
 __revision__ = '$Format:%H$'
 
-from qgis.PyQt.QtCore import QCoreApplication
-from qgis.core import (QgsProcessing,
-                       Qgis,
-                       QgsFeatureSink,
-                       QgsProcessingAlgorithm,
-                       QgsMessageLog,
-                       QgsProcessingParameterFeatureSource,
-                       QgsProcessingParameterFeatureSink,
-                       QgsProcessingParameterBoolean,
-                       QgsProcessingParameterFile)
+from qgis.PyQt.QtCore import (QCoreApplication, 
+                                QVariant)
+from qgis.core import *
 
 from qgis.utils import iface
+import time,os,string
 
 class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
     """
@@ -65,7 +59,8 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
     INPUT = 'INPUT'
   
     OUTPUT_DOPS = 'OUTPUT_DOPS'
-    OUTPUT_TRACK_COUNT = 'OUTPUT_TRACK_COUNT'
+    OUTPUT_COORDINATES = 'OUTPUT_COORDINATES'
+    OUTPUT_TIME = 'OUTPUT_TIME'
  
     def parse_b_record(self, b_record):
         """
@@ -113,11 +108,14 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
  
         self.addParameter(QgsProcessingParameterFile(self.INPUT, self.tr('Input NMEA file'),
                                                      0))
-        self.addParameter(QgsProcessingParameterBoolean(self.OUTPUT_DOPS,
-                                                        self.tr('Import DOPs if available'),
+        self.addParameter(QgsProcessingParameterBoolean(self.OUTPUT_COORDINATES,
+                                                        self.tr('Coordinates (Long. Lat.)'),
                                                         True, True))
         self.addParameter(QgsProcessingParameterBoolean(self.OUTPUT_DOPS,
-                                                        self.tr('Import DOPs if available'),
+                                                        self.tr('DOP values'),
+                                                        True, True))
+        self.addParameter(QgsProcessingParameterBoolean(self.OUTPUT_TIME,
+                                                        self.tr('Timestamp'),
                                                         True, True))
         # We add a feature sink in which to store our processed features (this
         # usually takes the form of a newly created vector layer when the
@@ -138,20 +136,57 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
         # to uniquely identify the feature sink, and must be included in the
         # dictionary returned by the processAlgorithm function.  
         input_file = self.parameterAsFile(parameters, self.INPUT, context)
+        dest_id = self.parameterAsFileOutput(parameters, self.OUTPUT, context)
+        writeCoords = self.parameterAsFile(parameters, self.OUTPUT_COORDINATES, context)
+        QgsMessageLog.logMessage( str(writeCoords)+" ==========", level=Qgis.Info )
         num_lines = sum(1 for line in open(input_file))
+
+        parser={'GGA':self.par_gga,'RMC':self.par_rmc,'GLL':self.par_gll}
+        self.nmeadict={}
         with open(input_file) as f:
             prev_track_point = None
             prev_track_point_index = -1
-            i=0
-            QgsMessageLog.logMessage( str(num_lines), level=Qgis.Info )
+            i=0 
+
+            feedback.pushInfo('Number of lines in NMEA:'+str(num_lines))
             for line in f:
+                if feedback.isCanceled():
+                    break
                 #track_point = self.parse_b_record(line)
                 i=i+1
                 percent = i / float(num_lines) * 100
-                # iface.mainWindow().statusBar().showMessage("Processed {} %".format(int(percent)))
-                iface.statusBarIface().showMessage("Processed {} %".format(int(percent)))
-  
- 
+                feedback.setProgress(int(percent)) 
+                if line[17:20]=='GGA' or line[17:20]=='GLL' or line[17:20]=='RMC':
+                    feedback.pushInfo(line[17:20])
+                    try:
+                        parserF=parser[line[17:20]]
+                        feedback.pushInfo(parserF(line))
+                    except Exception as e:  
+                        feedback.reportError( "Problem parsing line:  "+line + " Error: "+e,  True) 
+                        break
+        self.utc=[]
+        self.lat=[]
+        self.lon=[]
+        self.numSV=[]
+        self.hdop=[]
+        self.msl=[]
+        self.geoid=[]
+        self.speed=[]
+        self.fixstatus=[]
+        self.datastatus=[]
+        for keyy in self.nmeadict.keys():
+            self.utc.append(self.nmeadict[keyy][0])
+            self.numSV.append((self.nmeadict[keyy][3]))
+            self.hdop.append((self.nmeadict[keyy][4]))
+            self.lon.append(self.nmeadict[keyy][2])
+            self.lat.append(self.nmeadict[keyy][1])
+            self.msl.append((self.nmeadict[keyy][5]))
+            self.geoid.append((self.nmeadict[keyy][6]))
+            self.speed.append((self.nmeadict[keyy][7]))
+            self.fixstatus.append(int(self.nmeadict[keyy][9]))
+            self.datastatus.append(self.nmeadict[keyy][10])
+
+        self.addLayer(input_file)
         return {self.OUTPUT: dest_id}
 
     def name(self):
@@ -198,71 +233,63 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
     def par_gga(self,line):
         data=[]
         data=line.split(',')
-        key=data[1]
-        utc=data[1][:2]+':'+data[1][2:4]+':'+data[1][4:6]
-        if data[3]=='N':
-            latt=float(data[2][:2])+float(data[2][2:])/60
-        elif data[3]=='S':
-            latt=-1*float(data[2][:2])+float(data[2][2:])/60
-        else:
-            latt=self.nl
-        ind=string.find(data[4],".")
-        if data[5]=='E':
-            lonn=float(data[4][:(ind-2)])+float(data[4][(ind-2):])/60
-        elif data[5]=='W':
-            lonn=-1*float(data[4][:(ind-2)])+float(data[4][(ind-2):])/60
-        else:
-            lonn=self.nl
-        try:    numsv=float(data[7])
-        except: numsv=self.nl
-        try:    hdop=float(data[8])
-        except: hdop=self.nl
-        try:    msl=float(data[9])
-        except: msl=self.nl
-        try:    geoid=float(data[11])
-        except: geoid=self.nl
-        try:    fixstatus=float(data[6])
-        except: fixstatus=self.nl
-
-        self.nmeadict[key][0]=utc
-        self.nmeadict[key][1]=latt
-        self.nmeadict[key][2]=lonn
-        self.nmeadict[key][3]=numsv
-        self.nmeadict[key][4]=hdop
-        self.nmeadict[key][5]=msl
-        self.nmeadict[key][6]=geoid
-        self.nmeadict[key][9]=fixstatus
-
-    def par_rmc(self,line):
-        data=[]
-        data=line.split(',')
-        key=data[1]
-        utc=data[1][:2]+':'+data[1][2:4]+':'+data[1][4:6]
+        key=data[0]
+        utc=data[2][:2]+':'+data[2][2:4]+':'+data[2][4:6]
         if data[4]=='N':
             latt=float(data[3][:2])+float(data[3][2:])/60
-        elif data[4]=="S":
+        elif data[4]=='S':
             latt=-1*float(data[3][:2])+float(data[3][2:])/60
         else:
             latt=self.nl
-        ind=string.find(data[5],".")
+        ind=str.find(data[5],".")
         if data[6]=='E':
             lonn=float(data[5][:(ind-2)])+float(data[5][(ind-2):])/60
         elif data[6]=='W':
             lonn=-1*float(data[5][:(ind-2)])+float(data[5][(ind-2):])/60
         else:
             lonn=self.nl
-        try:    speed=float(data[7])
+        try:    numsv=float(data[8])
+        except: numsv=self.nl
+        try:    hdop=float(data[9])
+        except: hdop=self.nl
+        try:    msl=float(data[10])
+        except: msl=self.nl
+        try:    geoid=float(data[12])
+        except: geoid=self.nl
+        try:    fixstatus=float(data[7])
+        except: fixstatus=self.nl
+        self.nmeadict[key]=[ utc,latt,lonn,numsv,hdop,msl,geoid, None, None,fixstatus, None ]
+
+        return self.nmeadict[key][0]
+
+    def par_rmc(self,line):
+        data=[]
+        data=line.split(',')
+        key=data[0]
+        utc=data[2][:2]+':'+data[2][2:4]+':'+data[2][4:6]
+        if data[5]=='N':
+            latt=float(data[4][:2])+float(data[4][2:])/60
+        elif data[5]=="S":
+            latt=-1*float(data[4][:2])+float(data[4][2:])/60
+        else:
+            latt=self.nl
+        ind=str.find(data[6],".")
+        if data[7]=='E':
+            lonn=float(data[6][:(ind-2)])+float(data[6][(ind-2):])/60
+        elif data[7]=='W':
+            lonn=-1*float(data[6][:(ind-2)])+float(data[6][(ind-2):])/60
+        else:
+            lonn=self.nl
+        try:    speed=float(data[8])
         except: speed=self.nl
         try:
-            if data[2]=='A':    datastatus=1
+            if data[3]=='A':    datastatus=1
             else:   datastatus=0
         except: datastatus=self.nl
 
-        self.nmeadict[key][0]=utc
-        self.nmeadict[key][1]=latt
-        self.nmeadict[key][2]=lonn
-        self.nmeadict[key][7]=speed
-        self.nmeadict[key][10]=datastatus
+        self.nmeadict[key]=[ utc,latt,lonn,None,None,None,None, speed, None,None, datastatus ]
+ 
+        return self.nmeadict[key][0]
 
     def par_gll(self,line):
         data=[]
@@ -275,7 +302,7 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
             latt=-1*float(data[1][:2])+float(data[1][2:])/60
         else:
             latt=self.nl
-        ind=string.find(data[3],".")
+        ind=str.find(data[3],".")
         if data[4]=='E':
             lonn=float(data[3][:(ind-2)])+float(data[3][(ind-2):])/60
         elif data[4]=='W':
@@ -287,15 +314,14 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
             else:   datastatus=0
         except: datastatus=self.nl
 
-        self.nmeadict[key][0]=utc
-        self.nmeadict[key][1]=latt
-        self.nmeadict[key][2]=lonn
-        self.nmeadict[key][10]=datastatus
+        self.nmeadict[key]=[ utc,latt,lonn,None,None,None,None, None, None,None, datastatus ]
+ 
+        return self.nmeadict[key][0]
 
 
 
 
-    def addSave(self,filename):
+    def addLayer(self,filename):
         import os
         try:
             layername=os.path.basename(str(filename))
@@ -312,46 +338,36 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
         pr = nmealayer.dataProvider()
         att=[]
         a=0
-        if self.dlg3.ui.latCheck.isChecked():
-               pr.addAttributes( [ QgsField("latitude", QVariant.Double)] )
-               att.append(self.lat)
-               a+=1
-        if self.dlg3.ui.lonCheck.isChecked():
-               pr.addAttributes( [ QgsField("longitude", QVariant.Double)] )
-               att.append(self.lon)
-               a+=1
-        if self.dlg3.ui.utcCheck.isChecked():
-               pr.addAttributes( [ QgsField("utc", QVariant.String)] )
-               att.append(self.utc)
-               a+=1
-        if self.dlg3.ui.svCheck.isChecked():
-               pr.addAttributes( [ QgsField("numSV", QVariant.Double)] )
-               att.append(self.numSV)
-               a+=1
-        if self.dlg3.ui.hdopCheck.isChecked():
-               pr.addAttributes( [ QgsField("hdop", QVariant.Double)] )
-               att.append(self.hdop)
-               a+=1
-        if self.dlg3.ui.mslCheck.isChecked():
-               pr.addAttributes( [ QgsField("msl", QVariant.Double)] )
-               att.append(self.msl)
-               a+=1
-        if self.dlg3.ui.geoidCheck.isChecked():
-               pr.addAttributes( [ QgsField("geoid", QVariant.Double)] )
-               att.append(self.geoid)
-               a+=1
-        if self.dlg3.ui.speedCheck.isChecked():
-               pr.addAttributes( [ QgsField("speed", QVariant.Double)] )
-               att.append(self.speed)
-               a+=1
-        if self.dlg3.ui.fixstatusCheck.isChecked():
-               pr.addAttributes( [ QgsField("fixstatus", QVariant.Double)] )
-               att.append(self.fixstatus)
-               a+=1
-        if self.dlg3.ui.datastatusCheck.isChecked():
-               pr.addAttributes( [ QgsField("datastatus", QVariant.Double)] )
-               att.append(self.datastatus)
-               a+=1
+        pr.addAttributes( [ QgsField("latitude", QVariant.Double)] )
+        att.append(self.lat) 
+        pr.addAttributes( [ QgsField("longitude", QVariant.Double)] )
+        att.append(self.lon)
+        a+=2
+        pr.addAttributes( [ QgsField("utc", QVariant.String)] )
+        att.append(self.utc)
+        a+=1
+
+        pr.addAttributes( [ QgsField("numSV", QVariant.Double)] )
+        att.append(self.numSV)
+        a+=1
+        pr.addAttributes( [ QgsField("hdop", QVariant.Double)] )
+        att.append(self.hdop)
+        a+=1
+        pr.addAttributes( [ QgsField("msl", QVariant.Double)] )
+        att.append(self.msl)
+        a+=1
+        pr.addAttributes( [ QgsField("geoid", QVariant.Double)] )
+        att.append(self.geoid)
+        a+=1
+        pr.addAttributes( [ QgsField("speed", QVariant.Double)] )
+        att.append(self.speed)
+        a+=1
+        pr.addAttributes( [ QgsField("fixstatus", QVariant.Double)] )
+        att.append(self.fixstatus)
+        a+=1
+        pr.addAttributes( [ QgsField("datastatus", QVariant.Double)] )
+        att.append(self.datastatus)
+        a+=1
 
 
 
