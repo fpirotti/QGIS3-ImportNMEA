@@ -24,7 +24,7 @@
 
 __author__ = 'Francesco Pirotti University of Padova'
 __date__ = '2021-07-17'
-__copyright__ = '(C) 2021 by Francesco Pirotti University of Padova'
+__copyright__ = '(C) 2021 by Francesco Pirotti, University of Padova'
 
 # This will get replaced with a git SHA1 when you do a git archive
 
@@ -32,11 +32,16 @@ __revision__ = '$Format:%H$'
 
 from qgis.PyQt.QtCore import QCoreApplication
 from qgis.core import (QgsProcessing,
+                       Qgis,
                        QgsFeatureSink,
                        QgsProcessingAlgorithm,
+                       QgsMessageLog,
                        QgsProcessingParameterFeatureSource,
-                       QgsProcessingParameterFeatureSink)
+                       QgsProcessingParameterFeatureSink,
+                       QgsProcessingParameterBoolean,
+                       QgsProcessingParameterFile)
 
+from qgis.utils import iface
 
 class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
     """
@@ -58,6 +63,44 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
 
     OUTPUT = 'OUTPUT'
     INPUT = 'INPUT'
+  
+    OUTPUT_DOPS = 'OUTPUT_DOPS'
+    OUTPUT_TRACK_COUNT = 'OUTPUT_TRACK_COUNT'
+ 
+    def parse_b_record(self, b_record):
+        """
+        https://xp-soaring.github.io/igc_file_format/igc_format_2008.html#link_B
+        """
+
+        definitions = []
+
+        # https://xp-soaring.github.io/igc_file_format/igc_format_2008.html#link_FXA
+        # only the first 35 bytes are recognized
+        if b_record[0] != "B" or len(b_record) < 36: # 35 + \n
+            # not a b record
+            return None
+        time_utc = b_record[1:7]
+        latitude_str = b_record[7:15-1] # last is N for north / S for Sud
+        latitude_sign = b_record[14]
+        latitude = float(latitude_str[0:2]) + (float(latitude_str[2:4]) + float(latitude_str[4:7]) / 1000) / 60
+        if latitude_sign == "S":
+            latitude *= -1
+        longitude_str = b_record[15:24-1] # last is E for East/ O for Ovest
+        longitude_sign = b_record[23]
+        longitude = float(longitude_str[0:3]) + (float(longitude_str[3:5]) + float(longitude_str[5:8]) / 1000) / 60
+        if longitude_sign == "O":
+            longitude *= -1
+        fix_validity = b_record[24]
+        press_alt = int(b_record[25:30])
+        gnss_alt = int(b_record[30:35])
+
+        return {"time_utc": time_utc, 
+                "lat": latitude, 
+                "lon":longitude, 
+                "fix_validity":fix_validity, 
+                "press_alt":press_alt, 
+                "gnss_alt":gnss_alt}
+
 
     def initAlgorithm(self, config):
         """
@@ -67,14 +110,15 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
 
         # We add the input vector features source. It can have any kind of
         # geometry.
-        self.addParameter(
-            QgsProcessingParameterFeatureSource(
-                self.INPUT,
-                self.tr('Input layer'),
-                [QgsProcessing.TypeVectorAnyGeometry]
-            )
-        )
-
+ 
+        self.addParameter(QgsProcessingParameterFile(self.INPUT, self.tr('Input NMEA file'),
+                                                     0))
+        self.addParameter(QgsProcessingParameterBoolean(self.OUTPUT_DOPS,
+                                                        self.tr('Import DOPs if available'),
+                                                        True, True))
+        self.addParameter(QgsProcessingParameterBoolean(self.OUTPUT_DOPS,
+                                                        self.tr('Import DOPs if available'),
+                                                        True, True))
         # We add a feature sink in which to store our processed features (this
         # usually takes the form of a newly created vector layer when the
         # algorithm is run in QGIS).
@@ -92,33 +136,22 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
 
         # Retrieve the feature source and sink. The 'dest_id' variable is used
         # to uniquely identify the feature sink, and must be included in the
-        # dictionary returned by the processAlgorithm function.
-        source = self.parameterAsSource(parameters, self.INPUT, context)
-        (sink, dest_id) = self.parameterAsSink(parameters, self.OUTPUT,
-                context, source.fields(), source.wkbType(), source.sourceCrs())
-
-        # Compute the number of steps to display within the progress bar and
-        # get features from source
-        total = 100.0 / source.featureCount() if source.featureCount() else 0
-        features = source.getFeatures()
-
-        for current, feature in enumerate(features):
-            # Stop the algorithm if cancel button has been clicked
-            if feedback.isCanceled():
-                break
-
-            # Add a feature in the sink
-            sink.addFeature(feature, QgsFeatureSink.FastInsert)
-
-            # Update the progress bar
-            feedback.setProgress(int(current * total))
-
-        # Return the results of the algorithm. In this case our only result is
-        # the feature sink which contains the processed features, but some
-        # algorithms may return multiple feature sinks, calculated numeric
-        # statistics, etc. These should all be included in the returned
-        # dictionary, with keys matching the feature corresponding parameter
-        # or output names.
+        # dictionary returned by the processAlgorithm function.  
+        input_file = self.parameterAsFile(parameters, self.INPUT, context)
+        num_lines = sum(1 for line in open(input_file))
+        with open(input_file) as f:
+            prev_track_point = None
+            prev_track_point_index = -1
+            i=0
+            QgsMessageLog.logMessage( str(num_lines), level=Qgis.Info )
+            for line in f:
+                #track_point = self.parse_b_record(line)
+                i=i+1
+                percent = i / float(num_lines) * 100
+                # iface.mainWindow().statusBar().showMessage("Processed {} %".format(int(percent)))
+                iface.statusBarIface().showMessage("Processed {} %".format(int(percent)))
+  
+ 
         return {self.OUTPUT: dest_id}
 
     def name(self):
@@ -160,3 +193,183 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
 
     def createInstance(self):
         return ImportNMEAAlgorithm()
+
+
+    def par_gga(self,line):
+        data=[]
+        data=line.split(',')
+        key=data[1]
+        utc=data[1][:2]+':'+data[1][2:4]+':'+data[1][4:6]
+        if data[3]=='N':
+            latt=float(data[2][:2])+float(data[2][2:])/60
+        elif data[3]=='S':
+            latt=-1*float(data[2][:2])+float(data[2][2:])/60
+        else:
+            latt=self.nl
+        ind=string.find(data[4],".")
+        if data[5]=='E':
+            lonn=float(data[4][:(ind-2)])+float(data[4][(ind-2):])/60
+        elif data[5]=='W':
+            lonn=-1*float(data[4][:(ind-2)])+float(data[4][(ind-2):])/60
+        else:
+            lonn=self.nl
+        try:    numsv=float(data[7])
+        except: numsv=self.nl
+        try:    hdop=float(data[8])
+        except: hdop=self.nl
+        try:    msl=float(data[9])
+        except: msl=self.nl
+        try:    geoid=float(data[11])
+        except: geoid=self.nl
+        try:    fixstatus=float(data[6])
+        except: fixstatus=self.nl
+
+        self.nmeadict[key][0]=utc
+        self.nmeadict[key][1]=latt
+        self.nmeadict[key][2]=lonn
+        self.nmeadict[key][3]=numsv
+        self.nmeadict[key][4]=hdop
+        self.nmeadict[key][5]=msl
+        self.nmeadict[key][6]=geoid
+        self.nmeadict[key][9]=fixstatus
+
+    def par_rmc(self,line):
+        data=[]
+        data=line.split(',')
+        key=data[1]
+        utc=data[1][:2]+':'+data[1][2:4]+':'+data[1][4:6]
+        if data[4]=='N':
+            latt=float(data[3][:2])+float(data[3][2:])/60
+        elif data[4]=="S":
+            latt=-1*float(data[3][:2])+float(data[3][2:])/60
+        else:
+            latt=self.nl
+        ind=string.find(data[5],".")
+        if data[6]=='E':
+            lonn=float(data[5][:(ind-2)])+float(data[5][(ind-2):])/60
+        elif data[6]=='W':
+            lonn=-1*float(data[5][:(ind-2)])+float(data[5][(ind-2):])/60
+        else:
+            lonn=self.nl
+        try:    speed=float(data[7])
+        except: speed=self.nl
+        try:
+            if data[2]=='A':    datastatus=1
+            else:   datastatus=0
+        except: datastatus=self.nl
+
+        self.nmeadict[key][0]=utc
+        self.nmeadict[key][1]=latt
+        self.nmeadict[key][2]=lonn
+        self.nmeadict[key][7]=speed
+        self.nmeadict[key][10]=datastatus
+
+    def par_gll(self,line):
+        data=[]
+        data=line.split(',')
+        key=data[5]
+        utc=data[5][:2]+':'+data[5][2:4]+':'+data[5][4:6]
+        if data[2]=='N':
+            latt=float(data[1][:2])+float(data[1][2:])/60
+        elif data[2]=='S':
+            latt=-1*float(data[1][:2])+float(data[1][2:])/60
+        else:
+            latt=self.nl
+        ind=string.find(data[3],".")
+        if data[4]=='E':
+            lonn=float(data[3][:(ind-2)])+float(data[3][(ind-2):])/60
+        elif data[4]=='W':
+            lonn=-1*float(data[3][:(ind-2)])+float(data[3][(ind-2):])/60
+        else:
+            lonn=self.nl
+        try:
+            if data[6]=='A':    datastatus=1
+            else:   datastatus=0
+        except: datastatus=self.nl
+
+        self.nmeadict[key][0]=utc
+        self.nmeadict[key][1]=latt
+        self.nmeadict[key][2]=lonn
+        self.nmeadict[key][10]=datastatus
+
+
+
+
+    def addSave(self,filename):
+        import os
+        try:
+            layername=os.path.basename(str(filename))
+
+        except:
+            layername="nmealayer"
+
+
+        self.epsg4326= QgsCoordinateReferenceSystem()
+        self.epsg4326.createFromString("epsg:4326")
+        nmealayer = QgsVectorLayer("Point?crs=epsg:4326", layername, "memory")
+        nmealayer.startEditing()
+
+        pr = nmealayer.dataProvider()
+        att=[]
+        a=0
+        if self.dlg3.ui.latCheck.isChecked():
+               pr.addAttributes( [ QgsField("latitude", QVariant.Double)] )
+               att.append(self.lat)
+               a+=1
+        if self.dlg3.ui.lonCheck.isChecked():
+               pr.addAttributes( [ QgsField("longitude", QVariant.Double)] )
+               att.append(self.lon)
+               a+=1
+        if self.dlg3.ui.utcCheck.isChecked():
+               pr.addAttributes( [ QgsField("utc", QVariant.String)] )
+               att.append(self.utc)
+               a+=1
+        if self.dlg3.ui.svCheck.isChecked():
+               pr.addAttributes( [ QgsField("numSV", QVariant.Double)] )
+               att.append(self.numSV)
+               a+=1
+        if self.dlg3.ui.hdopCheck.isChecked():
+               pr.addAttributes( [ QgsField("hdop", QVariant.Double)] )
+               att.append(self.hdop)
+               a+=1
+        if self.dlg3.ui.mslCheck.isChecked():
+               pr.addAttributes( [ QgsField("msl", QVariant.Double)] )
+               att.append(self.msl)
+               a+=1
+        if self.dlg3.ui.geoidCheck.isChecked():
+               pr.addAttributes( [ QgsField("geoid", QVariant.Double)] )
+               att.append(self.geoid)
+               a+=1
+        if self.dlg3.ui.speedCheck.isChecked():
+               pr.addAttributes( [ QgsField("speed", QVariant.Double)] )
+               att.append(self.speed)
+               a+=1
+        if self.dlg3.ui.fixstatusCheck.isChecked():
+               pr.addAttributes( [ QgsField("fixstatus", QVariant.Double)] )
+               att.append(self.fixstatus)
+               a+=1
+        if self.dlg3.ui.datastatusCheck.isChecked():
+               pr.addAttributes( [ QgsField("datastatus", QVariant.Double)] )
+               att.append(self.datastatus)
+               a+=1
+
+
+
+        fett=[]
+        for a,lat in enumerate(self.lat):
+            fet = QgsFeature()
+            fet.setGeometry(QgsGeometry.fromPoint(QgsPoint(self.lon[a],lat)))
+            attributess=[]
+            for aa in att:
+                attributess.append(aa[a])
+            fet.setAttributes(attributess)
+            fett.append(fet)
+
+
+        pr.addFeatures(fett)
+
+        nmealayer.commitChanges()
+        nmealayer.updateExtents()
+        QgsProject.instance().addMapLayer(nmealayer)
+
+        self.iface.mapCanvas().zoomToFullExtent()
