@@ -61,42 +61,7 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
     OUTPUT_DOPS = 'OUTPUT_DOPS'
     OUTPUT_COORDINATES = 'OUTPUT_COORDINATES'
     OUTPUT_TIME = 'OUTPUT_TIME'
- 
-    def parse_b_record(self, b_record):
-        """
-        https://xp-soaring.github.io/igc_file_format/igc_format_2008.html#link_B
-        """
-
-        definitions = []
-
-        # https://xp-soaring.github.io/igc_file_format/igc_format_2008.html#link_FXA
-        # only the first 35 bytes are recognized
-        if b_record[0] != "B" or len(b_record) < 36: # 35 + \n
-            # not a b record
-            return None
-        time_utc = b_record[1:7]
-        latitude_str = b_record[7:15-1] # last is N for north / S for Sud
-        latitude_sign = b_record[14]
-        latitude = float(latitude_str[0:2]) + (float(latitude_str[2:4]) + float(latitude_str[4:7]) / 1000) / 60
-        if latitude_sign == "S":
-            latitude *= -1
-        longitude_str = b_record[15:24-1] # last is E for East/ O for Ovest
-        longitude_sign = b_record[23]
-        longitude = float(longitude_str[0:3]) + (float(longitude_str[3:5]) + float(longitude_str[5:8]) / 1000) / 60
-        if longitude_sign == "O":
-            longitude *= -1
-        fix_validity = b_record[24]
-        press_alt = int(b_record[25:30])
-        gnss_alt = int(b_record[30:35])
-
-        return {"time_utc": time_utc, 
-                "lat": latitude, 
-                "lon":longitude, 
-                "fix_validity":fix_validity, 
-                "press_alt":press_alt, 
-                "gnss_alt":gnss_alt}
-
-
+  
     def initAlgorithm(self, config):
         """
         Here we define the inputs and output of the algorithm, along
@@ -151,13 +116,11 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
             feedback.pushInfo('Number of lines in NMEA:'+str(num_lines))
             for line in f:
                 if feedback.isCanceled():
-                    break
-                #track_point = self.parse_b_record(line)
+                    break 
                 i=i+1
                 percent = i / float(num_lines) * 100
                 feedback.setProgress(int(percent)) 
                 if line[17:20]=='GGA' or line[17:20]=='GLL' or line[17:20]=='RMC':
-                    feedback.pushInfo(line[17:20])
                     try:
                         parserF=parser[line[17:20]]
                         feedback.pushInfo(parserF(line))
@@ -175,6 +138,7 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
         self.fixstatus=[]
         self.datastatus=[]
         for keyy in self.nmeadict.keys():
+            feedback.pushInfo(self.nmeadict[keyy][0]) 
             self.utc.append(self.nmeadict[keyy][0])
             self.numSV.append((self.nmeadict[keyy][3]))
             self.hdop.append((self.nmeadict[keyy][4]))
@@ -183,10 +147,20 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
             self.msl.append((self.nmeadict[keyy][5]))
             self.geoid.append((self.nmeadict[keyy][6]))
             self.speed.append((self.nmeadict[keyy][7]))
-            self.fixstatus.append(int(self.nmeadict[keyy][9]))
+
+            feedback.pushInfo("===================") 
+            feedback.pushInfo(str(self.nmeadict[keyy][2])) 
+            feedback.pushInfo("===================") 
+            feedback.pushInfo(str(self.nmeadict[keyy][4])) 
+            feedback.pushInfo("===================") 
+            feedback.pushInfo(str(self.nmeadict[keyy][9]) )
+
+            self.fixstatus.append((self.nmeadict[keyy][9]))
             self.datastatus.append(self.nmeadict[keyy][10])
 
-        self.addLayer(input_file)
+        dest_id = self.addLayer(input_file, feedback)
+ 
+ 
         return {self.OUTPUT: dest_id}
 
     def name(self):
@@ -240,25 +214,25 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
         elif data[4]=='S':
             latt=-1*float(data[3][:2])+float(data[3][2:])/60
         else:
-            latt=self.nl
+            latt=NULL
         ind=str.find(data[5],".")
         if data[6]=='E':
             lonn=float(data[5][:(ind-2)])+float(data[5][(ind-2):])/60
         elif data[6]=='W':
             lonn=-1*float(data[5][:(ind-2)])+float(data[5][(ind-2):])/60
         else:
-            lonn=self.nl
+            lonn=NULL
         try:    numsv=float(data[8])
-        except: numsv=self.nl
+        except: numsv=NULL
         try:    hdop=float(data[9])
-        except: hdop=self.nl
+        except: hdop=NULL
         try:    msl=float(data[10])
-        except: msl=self.nl
+        except: msl=NULL
         try:    geoid=float(data[12])
-        except: geoid=self.nl
+        except: geoid=NULL
         try:    fixstatus=float(data[7])
-        except: fixstatus=self.nl
-        self.nmeadict[key]=[ utc,latt,lonn,numsv,hdop,msl,geoid, None, None,fixstatus, None ]
+        except: fixstatus=NULL
+        self.nmeadict[key]=[ utc,latt,lonn,numsv,hdop,msl,geoid, NULL, NULL,fixstatus, NULL ]
 
         return self.nmeadict[key][0]
 
@@ -272,22 +246,22 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
         elif data[5]=="S":
             latt=-1*float(data[4][:2])+float(data[4][2:])/60
         else:
-            latt=self.nl
+            latt=NULL
         ind=str.find(data[6],".")
         if data[7]=='E':
             lonn=float(data[6][:(ind-2)])+float(data[6][(ind-2):])/60
         elif data[7]=='W':
             lonn=-1*float(data[6][:(ind-2)])+float(data[6][(ind-2):])/60
         else:
-            lonn=self.nl
+            lonn=NULL
         try:    speed=float(data[8])
-        except: speed=self.nl
+        except: speed=NULL
         try:
             if data[3]=='A':    datastatus=1
             else:   datastatus=0
-        except: datastatus=self.nl
+        except: datastatus=NULL
 
-        self.nmeadict[key]=[ utc,latt,lonn,None,None,None,None, speed, None,None, datastatus ]
+        self.nmeadict[key]=[ utc,latt,lonn,NULL,NULL,NULL,NULL, speed, NULL, NULL, datastatus ]
  
         return self.nmeadict[key][0]
 
@@ -301,31 +275,29 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
         elif data[2]=='S':
             latt=-1*float(data[1][:2])+float(data[1][2:])/60
         else:
-            latt=self.nl
+            latt=NULL
         ind=str.find(data[3],".")
         if data[4]=='E':
             lonn=float(data[3][:(ind-2)])+float(data[3][(ind-2):])/60
         elif data[4]=='W':
             lonn=-1*float(data[3][:(ind-2)])+float(data[3][(ind-2):])/60
         else:
-            lonn=self.nl
+            lonn=NULL
         try:
             if data[6]=='A':    datastatus=1
             else:   datastatus=0
-        except: datastatus=self.nl
+        except: datastatus=NULL
 
-        self.nmeadict[key]=[ utc,latt,lonn,None,None,None,None, None, None,None, datastatus ]
+        self.nmeadict[key]=[ utc,latt,lonn,NULL,NULL,NULL,NULL, NULL, NULL,NULL, datastatus ]
  
         return self.nmeadict[key][0]
 
 
 
 
-    def addLayer(self,filename):
-        import os
+    def addLayer(self,filename, feedback): 
         try:
             layername=os.path.basename(str(filename))
-
         except:
             layername="nmealayer"
 
@@ -362,6 +334,9 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
         pr.addAttributes( [ QgsField("speed", QVariant.Double)] )
         att.append(self.speed)
         a+=1
+
+        #string_ints = [str(int) for int in self.fixstatus ]
+        #feedback.pushInfo( ",".join(string_ints) )
         pr.addAttributes( [ QgsField("fixstatus", QVariant.Double)] )
         att.append(self.fixstatus)
         a+=1
@@ -374,7 +349,7 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
         fett=[]
         for a,lat in enumerate(self.lat):
             fet = QgsFeature()
-            fet.setGeometry(QgsGeometry.fromPoint(QgsPoint(self.lon[a],lat)))
+            fet.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(self.lon[a],lat)))
             attributess=[]
             for aa in att:
                 attributess.append(aa[a])
@@ -386,6 +361,11 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
 
         nmealayer.commitChanges()
         nmealayer.updateExtents()
-        QgsProject.instance().addMapLayer(nmealayer)
 
-        self.iface.mapCanvas().zoomToFullExtent()
+        if not nmealayer.isValid():
+            feedback.pushInfo( "Layer failed to load: Layer name = "+layername )
+        else:
+            QgsProject.instance().addMapLayer(nmealayer)
+        return nmealayer
+
+        #self.iface.mapCanvas().zoomToFullExtent()
