@@ -33,8 +33,7 @@ __revision__ = '$Format:%H$'
 from qgis.PyQt.QtCore import (QCoreApplication, 
                                 QVariant)
 from qgis.core import *
-
-from qgis.utils import iface
+from qgis.utils import iface 
 import time,os,string,math
 
 class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
@@ -61,6 +60,7 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
     OUTPUT_DOPS = 'OUTPUT_DOPS'
     OUTPUT_COORDINATES = 'OUTPUT_COORDINATES'
     OUTPUT_TIME = 'OUTPUT_TIME'
+    OUTPUT_VERBOSE = 'OUTPUT_TIME'
   
     def initAlgorithm(self, config):
         """
@@ -73,15 +73,10 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
  
         self.addParameter(QgsProcessingParameterFile(self.INPUT, self.tr('Input NMEA file'),
                                                      0))
-        self.addParameter(QgsProcessingParameterBoolean(self.OUTPUT_COORDINATES,
-                                                        self.tr('Coordinates (Long. Lat.)'),
+        self.addParameter(QgsProcessingParameterBoolean(self.OUTPUT_VERBOSE,
+                                                        self.tr('Super Verbose (slow if many points)'),
                                                         True, True))
-        self.addParameter(QgsProcessingParameterBoolean(self.OUTPUT_DOPS,
-                                                        self.tr('DOP values'),
-                                                        True, True))
-        self.addParameter(QgsProcessingParameterBoolean(self.OUTPUT_TIME,
-                                                        self.tr('Timestamp'),
-                                                        True, True))
+
         # We add a feature sink in which to store our processed features (this
         # usually takes the form of a newly created vector layer when the
         # algorithm is run in QGIS).
@@ -96,7 +91,7 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
         """
         Here is where the processing itself takes place.
         """
-
+        self.feedback = feedback
         self.utc=[]
         self.lat=[]
         self.lon=[]
@@ -107,15 +102,18 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
         self.speed=[]
         self.fixstatus=[]
         self.datastatus=[]
+        self.canvas = iface.mapCanvas()
 
         # Retrieve the feature source and sink. The 'dest_id' variable is used
         # to uniquely identify the feature sink, and must be included in the
         # dictionary returned by the processAlgorithm function.  
         input_file = self.parameterAsFile(parameters, self.INPUT, context)
         dest_id = self.parameterAsFileOutput(parameters, self.OUTPUT, context)
-        writeCoords = self.parameterAsFile(parameters, self.OUTPUT_COORDINATES, context)
-        QgsMessageLog.logMessage( str(writeCoords)+" ==========", level=Qgis.Info )
+        self.verbose = self.parameterAsFile(parameters, self.OUTPUT_VERBOSE, context)
+
         num_lines = sum(1 for line in open(input_file))
+        
+        self.Qpr_inst = QgsProject.instance()
 
         parser={'GGA':self.par_gga,'RMC':self.par_rmc,'GLL':self.par_gll}
         self.nmeadict={}
@@ -147,6 +145,7 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
                     self.utc.append(self.nmeadict[keyy][0])
                     self.numSV.append((self.nmeadict[keyy][3]))
                     self.hdop.append((self.nmeadict[keyy][4]))
+
                     self.lon.append(self.nmeadict[keyy][2])
                     self.lat.append(self.nmeadict[keyy][1])
                     self.msl.append((self.nmeadict[keyy][5]))
@@ -155,16 +154,34 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
 
                     self.fixstatus.append((self.nmeadict[keyy][9]))
                     self.datastatus.append(self.nmeadict[keyy][10])
+                    if self.verbose:
+                        feedback.pushInfo(keyy)
+                        feedback.pushInfo("LAT="+str(self.nmeadict[keyy][1]))
+                        feedback.pushInfo("LONG="+str(self.nmeadict[keyy][2]))
+                        
         #for keyy in self.nmeadict.keys():
             #feedback.pushInfo(self.nmeadict[keyy][0]) 
 
-
+        f.close()
         dest_id = self.addLayer(input_file, feedback)
- 
+        self.layerNMEA = dest_id
+        try:
+            layername=os.path.basename(str(input_file))
+        except:
+            layername="nmealayer"
 
-        QgsProject.instance().addMapLayer(dest_id)
+
+        feedback.pushInfo(layername +"----------------")
+
+        #QgsProject.instance().addMapLayer(dest_id)
+        feedback.pushInfo(str(dest_id.extent()))
         iface.mapCanvas().zoomToFeatureExtent( dest_id.extent() )
  
+        g = self.Qpr_inst.layerTreeRoot().insertGroup(0, layername)
+        self.Qpr_inst.addMapLayer(self.layerNMEA, False)
+        nn = QgsLayerTreeLayer(self.layerNMEA)
+        g.insertChildNode(0, nn)
+
         return {self.OUTPUT: dest_id}
 
     def name(self):
@@ -209,6 +226,8 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
 
 
     def par_gga(self,line):
+        if self.verbose:
+            self.feedback.pushInfo("Reading GGA") 
         data=[]
         data=line.split(',')
         key=data[0]
@@ -241,6 +260,8 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
         return key
 
     def par_rmc(self,line):
+        if self.verbose:
+            self.feedback.pushInfo("Reading RMC") 
         data=[]
         data=line.split(',')
         key=data[0]
@@ -270,25 +291,27 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
         return key
 
     def par_gll(self,line):
+        if self.verbose:
+            self.feedback.pushInfo("Reading GLL") 
         data=[]
         data=line.split(',')
-        key=data[5]
-        utc=data[5][:2]+':'+data[5][2:4]+':'+data[5][4:6]
-        if data[2]=='N':
-            latt=float(data[1][:2])+float(data[1][2:])/60
-        elif data[2]=='S':
-            latt=-1*float(data[1][:2])+float(data[1][2:])/60
+        key=data[0]
+        utc=data[6][:2]+':'+data[6][2:4]+':'+data[6][4:6]
+        if data[3]=='N':
+            latt=float(data[2][:2])+float(data[2][2:])/60
+        elif data[3]=='S':
+            latt=-1*float(data[2][:2])+float(data[2][2:])/60
         else:
             latt=NULL
         ind=str.find(data[3],".")
-        if data[4]=='E':
-            lonn=float(data[3][:(ind-2)])+float(data[3][(ind-2):])/60
-        elif data[4]=='W':
-            lonn=-1*float(data[3][:(ind-2)])+float(data[3][(ind-2):])/60
+        if data[5]=='E':
+            lonn=float(data[4][:(ind-2)])+float(data[4][(ind-2):])/60
+        elif data[5]=='W':
+            lonn=-1*float(data[4][:(ind-2)])+float(data[4][(ind-2):])/60
         else:
             lonn=NULL
         try:
-            if data[6]=='A':    datastatus=1
+            if data[7]=='A':    datastatus=1
             else:   datastatus=0
         except: datastatus=NULL
 
