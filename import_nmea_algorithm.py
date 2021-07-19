@@ -35,7 +35,7 @@ from qgis.PyQt.QtCore import (QCoreApplication,
 from qgis.core import *
 
 from qgis.utils import iface
-import time,os,string
+import time,os,string,math
 
 class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
     """
@@ -97,6 +97,17 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
         Here is where the processing itself takes place.
         """
 
+        self.utc=[]
+        self.lat=[]
+        self.lon=[]
+        self.numSV=[]
+        self.hdop=[]
+        self.msl=[]
+        self.geoid=[]
+        self.speed=[]
+        self.fixstatus=[]
+        self.datastatus=[]
+
         # Retrieve the feature source and sink. The 'dest_id' variable is used
         # to uniquely identify the feature sink, and must be included in the
         # dictionary returned by the processAlgorithm function.  
@@ -112,54 +123,47 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
             prev_track_point = None
             prev_track_point_index = -1
             i=0 
+            every = math.floor( float(num_lines) / 100 )
+            if every == 0:
+                every = 1
 
             feedback.pushInfo('Number of lines in NMEA:'+str(num_lines))
             for line in f:
                 if feedback.isCanceled():
                     break 
                 i=i+1
-                percent = i / float(num_lines) * 100
-                feedback.setProgress(int(percent)) 
+                percent = math.floor( i / float(num_lines) * 100 )
+                if(percent%every==0.0):
+                    feedback.setProgress(int(percent)) 
                 if line[17:20]=='GGA' or line[17:20]=='GLL' or line[17:20]=='RMC':
                     try:
                         parserF=parser[line[17:20]]
-                        feedback.pushInfo(parserF(line))
+                        keyy = parserF(line)
+                        #feedback.pushInfo(keyy)
                     except Exception as e:  
                         feedback.reportError( "Problem parsing line:  "+line + " Error: "+e,  True) 
                         break
-        self.utc=[]
-        self.lat=[]
-        self.lon=[]
-        self.numSV=[]
-        self.hdop=[]
-        self.msl=[]
-        self.geoid=[]
-        self.speed=[]
-        self.fixstatus=[]
-        self.datastatus=[]
-        for keyy in self.nmeadict.keys():
-            feedback.pushInfo(self.nmeadict[keyy][0]) 
-            self.utc.append(self.nmeadict[keyy][0])
-            self.numSV.append((self.nmeadict[keyy][3]))
-            self.hdop.append((self.nmeadict[keyy][4]))
-            self.lon.append(self.nmeadict[keyy][2])
-            self.lat.append(self.nmeadict[keyy][1])
-            self.msl.append((self.nmeadict[keyy][5]))
-            self.geoid.append((self.nmeadict[keyy][6]))
-            self.speed.append((self.nmeadict[keyy][7]))
 
-            feedback.pushInfo("===================") 
-            feedback.pushInfo(str(self.nmeadict[keyy][2])) 
-            feedback.pushInfo("===================") 
-            feedback.pushInfo(str(self.nmeadict[keyy][4])) 
-            feedback.pushInfo("===================") 
-            feedback.pushInfo(str(self.nmeadict[keyy][9]) )
+                    self.utc.append(self.nmeadict[keyy][0])
+                    self.numSV.append((self.nmeadict[keyy][3]))
+                    self.hdop.append((self.nmeadict[keyy][4]))
+                    self.lon.append(self.nmeadict[keyy][2])
+                    self.lat.append(self.nmeadict[keyy][1])
+                    self.msl.append((self.nmeadict[keyy][5]))
+                    self.geoid.append((self.nmeadict[keyy][6]))
+                    self.speed.append((self.nmeadict[keyy][7]))
 
-            self.fixstatus.append((self.nmeadict[keyy][9]))
-            self.datastatus.append(self.nmeadict[keyy][10])
+                    self.fixstatus.append((self.nmeadict[keyy][9]))
+                    self.datastatus.append(self.nmeadict[keyy][10])
+        #for keyy in self.nmeadict.keys():
+            #feedback.pushInfo(self.nmeadict[keyy][0]) 
+
 
         dest_id = self.addLayer(input_file, feedback)
  
+
+        QgsProject.instance().addMapLayer(dest_id)
+        iface.mapCanvas().zoomToFeatureExtent( dest_id.extent() )
  
         return {self.OUTPUT: dest_id}
 
@@ -234,7 +238,7 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
         except: fixstatus=NULL
         self.nmeadict[key]=[ utc,latt,lonn,numsv,hdop,msl,geoid, NULL, NULL,fixstatus, NULL ]
 
-        return self.nmeadict[key][0]
+        return key
 
     def par_rmc(self,line):
         data=[]
@@ -263,7 +267,7 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
 
         self.nmeadict[key]=[ utc,latt,lonn,NULL,NULL,NULL,NULL, speed, NULL, NULL, datastatus ]
  
-        return self.nmeadict[key][0]
+        return key
 
     def par_gll(self,line):
         data=[]
@@ -290,7 +294,7 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
 
         self.nmeadict[key]=[ utc,latt,lonn,NULL,NULL,NULL,NULL, NULL, NULL,NULL, datastatus ]
  
-        return self.nmeadict[key][0]
+        return key
 
 
 
@@ -363,9 +367,8 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
         nmealayer.updateExtents()
 
         if not nmealayer.isValid():
-            feedback.pushInfo( "Layer failed to load: Layer name = "+layername )
-        else:
-            QgsProject.instance().addMapLayer(nmealayer)
+            feedback.reportError( "Layer failed to load: Layer name = "+layername,  True )
+        
         return nmealayer
 
         #self.iface.mapCanvas().zoomToFullExtent()
