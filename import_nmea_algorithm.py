@@ -230,10 +230,10 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
         self.canvas.setExtent(extent)
           
 
-        g = self.Qpr_inst.layerTreeRoot().insertGroup(0, layername)
+        #g = self.Qpr_inst.layerTreeRoot().insertGroup(0, layername)
         self.Qpr_inst.addMapLayer(self.layerNMEA, True)
-        nn = QgsLayerTreeLayer(self.layerNMEA)
-        g.insertChildNode(0, nn)
+        #nn = QgsLayerTreeLayer(self.layerNMEA)
+        #g.insertChildNode(0, nn)
         if self.canvas.isCachingEnabled():
             self.layerNMEA.triggerRepaint()
         else:
