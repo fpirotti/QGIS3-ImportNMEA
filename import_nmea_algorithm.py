@@ -68,6 +68,9 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
     OUTPUT_COORDINATES = 'OUTPUT_COORDINATES'
     OUTPUT_TIME = 'OUTPUT_TIME'
     OUTPUT_VERBOSE = 'OUTPUT_TIME'
+    OUTPUT_GGA = 'OUTPUT_GGA'
+    OUTPUT_GLL = 'OUTPUT_GLL'
+    OUTPUT_RMC = 'OUTPUT_RMC'
    
 
     def initAlgorithm(self, config):
@@ -82,10 +85,19 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
         self.canvas = iface.mapCanvas()
         self.addParameter(QgsProcessingParameterFile(self.INPUT, self.tr('Input NMEA file'),
                                                      0))
+        self.addParameter(QgsProcessingParameterBoolean(self.OUTPUT_GGA,
+                                                        self.tr('Read $GPGGA sentence'),
+                                                        True, True))
+        self.addParameter(QgsProcessingParameterBoolean(self.OUTPUT_GLL,
+                                                        self.tr('Read $GPGLL sentence'),
+                                                        False, True))
+        self.addParameter(QgsProcessingParameterBoolean(self.OUTPUT_RMC,
+                                                        self.tr('Read $GPRMC sentence'),
+                                                        False, True))
+
         self.addParameter(QgsProcessingParameterBoolean(self.OUTPUT_VERBOSE,
                                                         self.tr('Super Verbose (slow if many points)'),
-                                                        True, True))
-
+                                                        False, True))
         # We add a feature sink in which to store our processed features (this
         # usually takes the form of a newly created vector layer when the
         # algorithm is run in QGIS).
@@ -123,8 +135,18 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
         # dictionary returned by the processAlgorithm function.  
         input_file = self.parameterAsFile(parameters, self.INPUT, context)
         dest_id = self.parameterAsFileOutput(parameters, self.OUTPUT, context)
-        self.verbose = self.parameterAsFile(parameters, self.OUTPUT_VERBOSE, context)
-        print(self.verbose)
+        self.verbose = self.parameterAsBoolean(parameters, self.OUTPUT_VERBOSE, context)
+        self.sentences = {}
+        self.gll = self.parameterAsBoolean(parameters, self.OUTPUT_GLL, context)
+        self.gga = self.parameterAsBoolean(parameters, self.OUTPUT_GGA, context)
+        self.rmc = self.parameterAsBoolean(parameters, self.OUTPUT_RMC, context)
+        if self.gll is True:
+            self.sentences['GLL']="GLL"
+        if self.gga is True:
+            self.sentences['GGA']="GGA" 
+        if self.rmc is True:
+            self.sentences['RMC']="RMC" 
+ 
         f = open(input_file)
         num_lines = sum(1 for line in f)
         f.close()
@@ -139,22 +161,23 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
             every = int(math.floor( float(num_lines) / 100 ))
             if every == 0:
                 every = 1
-            percent = 0
-            print("=====every = "+str(every))
+            percent = 0 
             feedback.pushInfo('Number of lines in NMEA:'+str(num_lines))
             for line in f:
                 if feedback.isCanceled():
                     break 
                 i=i+1 
-                if(i%every==0.0):
-                    print(percent)
+                if(i%every==0.0): 
                     percent = percent + 1
                     feedback.setProgress(int(percent)) 
-                if line[17:20]=='GGA' or line[17:20]=='GLL' or line[17:20]=='RMC':
+
+                sentence = line[17:20]
+
+                if sentence in self.sentences:
                     try:
-                        parserF=parser[line[17:20]]
+                        parserF=parser[sentence]
                         keyy = parserF(line)
-                        self.message.append(line[17:20])
+                        self.message.append(sentence)
                         #feedback.pushInfo(keyy)
                     except Exception as e:  
                         feedback.reportError( "Problem parsing line:  "+line + " Error: "+e,  True) 
@@ -173,7 +196,7 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
                     self.fixstatus.append((self.nmeadict[keyy][9]))
                     self.datastatus.append(self.nmeadict[keyy][10])
                      
-                    if self.verbose:
+                    if self.verbose is True:
                         feedback.pushInfo(keyy)
                         feedback.pushInfo("LAT="+str(self.nmeadict[keyy][1]))
                         feedback.pushInfo("LONG="+str(self.nmeadict[keyy][2]))
@@ -195,9 +218,17 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
 
         #QgsProject.instance().addMapLayer(dest_id)
         feedback.pushInfo(str(dest_id.extent()))
-        self.canvas.zoomToFeatureExtent( dest_id.extent() )
- 
-        return {}
+        #self.canvas.zoomToFeatureExtent( dest_id.extent() )
+        vLayer = iface.activeLayer() 
+        extent = dest_id.extent()
+
+        sourceCrs = QgsCoordinateReferenceSystem(4326) 
+        tr = QgsCoordinateTransform(sourceCrs, QgsProject.instance().crs(), QgsProject.instance())
+
+        extent = tr.transformBoundingBox(extent)
+
+        self.canvas.setExtent(extent)
+          
 
         g = self.Qpr_inst.layerTreeRoot().insertGroup(0, layername)
         self.Qpr_inst.addMapLayer(self.layerNMEA, True)
@@ -208,7 +239,7 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
         else:
             self.canvas.refresh() 
  
-        return {self.OUTPUT: dest_id}
+        return { }
 
     def name(self):
         """
@@ -252,7 +283,7 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
 
 
     def par_gga(self,line):
-        if self.verbose:
+        if self.verbose is True:
             self.feedback.pushInfo("Reading GGA") 
         data=[]
         data=line.split(',')
@@ -286,7 +317,7 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
         return key
 
     def par_rmc(self,line):
-        if self.verbose:
+        if self.verbose is True:
             self.feedback.pushInfo("Reading RMC") 
         data=[]
         data=line.split(',')
@@ -317,7 +348,7 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
         return key
 
     def par_gll(self,line):
-        if self.verbose:
+        if self.verbose is True:
             self.feedback.pushInfo("Reading GLL") 
         data=[]
         data=line.split(',')
@@ -354,8 +385,8 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
         except:
             layername="nmealayer"
  
-        self.epsg4326= QgsCoordinateReferenceSystem() 
-        self.epsg4326.createFromProj4("+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")
+        self.epsg4326= QgsCoordinateReferenceSystem(4326) 
+        #self.epsg4326.createFromProj4("+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")
         nmealayer = QgsVectorLayer("Point?crs=epsg:4326", layername, "memory")
         nmealayer.startEditing()
 
