@@ -30,11 +30,18 @@ __copyright__ = '(C) 2021 by Francesco Pirotti, University of Padova'
 
 __revision__ = '$Format:%H$'
 
+
+import os
+import inspect
+from qgis.PyQt.QtGui import QIcon
+
 from qgis.PyQt.QtCore import (QCoreApplication, 
                                 QVariant)
 from qgis.core import *
-from qgis.utils import iface 
+
+from qgis.utils import *
 import time,os,string,math
+
 
 class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
     """
@@ -61,7 +68,8 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
     OUTPUT_COORDINATES = 'OUTPUT_COORDINATES'
     OUTPUT_TIME = 'OUTPUT_TIME'
     OUTPUT_VERBOSE = 'OUTPUT_TIME'
-  
+   
+
     def initAlgorithm(self, config):
         """
         Here we define the inputs and output of the algorithm, along
@@ -71,6 +79,7 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
         # We add the input vector features source. It can have any kind of
         # geometry.
  
+        self.canvas = iface.mapCanvas()
         self.addParameter(QgsProcessingParameterFile(self.INPUT, self.tr('Input NMEA file'),
                                                      0))
         self.addParameter(QgsProcessingParameterBoolean(self.OUTPUT_VERBOSE,
@@ -80,12 +89,17 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
         # We add a feature sink in which to store our processed features (this
         # usually takes the form of a newly created vector layer when the
         # algorithm is run in QGIS).
-        self.addParameter(
-            QgsProcessingParameterFeatureSink(
-                self.OUTPUT,
-                self.tr('Output layer')
-            )
-        )
+        #self.addParameter(
+        #    QgsProcessingParameterFeatureSink(
+        #        self.OUTPUT,
+        #        self.tr('Output layer')
+        #    )
+        #)
+
+    def icon(self):
+        cmd_folder = os.path.split(inspect.getfile(inspect.currentframe()))[0]
+        icon = QIcon(os.path.join(os.path.join(cmd_folder, 'logo.png')))
+        return icon
 
     def processAlgorithm(self, parameters, context, feedback):
         """
@@ -102,7 +116,7 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
         self.speed=[]
         self.fixstatus=[]
         self.datastatus=[]
-        self.canvas = iface.mapCanvas()
+        self.message=[]
 
         # Retrieve the feature source and sink. The 'dest_id' variable is used
         # to uniquely identify the feature sink, and must be included in the
@@ -110,9 +124,10 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
         input_file = self.parameterAsFile(parameters, self.INPUT, context)
         dest_id = self.parameterAsFileOutput(parameters, self.OUTPUT, context)
         self.verbose = self.parameterAsFile(parameters, self.OUTPUT_VERBOSE, context)
-
-        num_lines = sum(1 for line in open(input_file))
-        
+        print(self.verbose)
+        f = open(input_file)
+        num_lines = sum(1 for line in f)
+        f.close()
         self.Qpr_inst = QgsProject.instance()
 
         parser={'GGA':self.par_gga,'RMC':self.par_rmc,'GLL':self.par_gll}
@@ -121,22 +136,25 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
             prev_track_point = None
             prev_track_point_index = -1
             i=0 
-            every = math.floor( float(num_lines) / 100 )
+            every = int(math.floor( float(num_lines) / 100 ))
             if every == 0:
                 every = 1
-
+            percent = 0
+            print("=====every = "+str(every))
             feedback.pushInfo('Number of lines in NMEA:'+str(num_lines))
             for line in f:
                 if feedback.isCanceled():
                     break 
-                i=i+1
-                percent = math.floor( i / float(num_lines) * 100 )
-                if(percent%every==0.0):
+                i=i+1 
+                if(i%every==0.0):
+                    print(percent)
+                    percent = percent + 1
                     feedback.setProgress(int(percent)) 
                 if line[17:20]=='GGA' or line[17:20]=='GLL' or line[17:20]=='RMC':
                     try:
                         parserF=parser[line[17:20]]
                         keyy = parserF(line)
+                        self.message.append(line[17:20])
                         #feedback.pushInfo(keyy)
                     except Exception as e:  
                         feedback.reportError( "Problem parsing line:  "+line + " Error: "+e,  True) 
@@ -154,6 +172,7 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
 
                     self.fixstatus.append((self.nmeadict[keyy][9]))
                     self.datastatus.append(self.nmeadict[keyy][10])
+                     
                     if self.verbose:
                         feedback.pushInfo(keyy)
                         feedback.pushInfo("LAT="+str(self.nmeadict[keyy][1]))
@@ -164,6 +183,7 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
 
         f.close()
         dest_id = self.addLayer(input_file, feedback)
+
         self.layerNMEA = dest_id
         try:
             layername=os.path.basename(str(input_file))
@@ -175,13 +195,19 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
 
         #QgsProject.instance().addMapLayer(dest_id)
         feedback.pushInfo(str(dest_id.extent()))
-        iface.mapCanvas().zoomToFeatureExtent( dest_id.extent() )
+        self.canvas.zoomToFeatureExtent( dest_id.extent() )
  
+        return {}
+
         g = self.Qpr_inst.layerTreeRoot().insertGroup(0, layername)
-        self.Qpr_inst.addMapLayer(self.layerNMEA, False)
+        self.Qpr_inst.addMapLayer(self.layerNMEA, True)
         nn = QgsLayerTreeLayer(self.layerNMEA)
         g.insertChildNode(0, nn)
-
+        if self.canvas.isCachingEnabled():
+            self.layerNMEA.triggerRepaint()
+        else:
+            self.canvas.refresh() 
+ 
         return {self.OUTPUT: dest_id}
 
     def name(self):
@@ -303,7 +329,7 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
             latt=-1*float(data[2][:2])+float(data[2][2:])/60
         else:
             latt=NULL
-        ind=str.find(data[3],".")
+        ind=str.find(data[4],".")
         if data[5]=='E':
             lonn=float(data[4][:(ind-2)])+float(data[4][(ind-2):])/60
         elif data[5]=='W':
@@ -327,10 +353,9 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
             layername=os.path.basename(str(filename))
         except:
             layername="nmealayer"
-
-
-        self.epsg4326= QgsCoordinateReferenceSystem()
-        self.epsg4326.createFromString("epsg:4326")
+ 
+        self.epsg4326= QgsCoordinateReferenceSystem() 
+        self.epsg4326.createFromProj4("+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")
         nmealayer = QgsVectorLayer("Point?crs=epsg:4326", layername, "memory")
         nmealayer.startEditing()
 
@@ -359,19 +384,15 @@ class ImportNMEAAlgorithm(QgsProcessingAlgorithm):
         att.append(self.geoid)
         a+=1
         pr.addAttributes( [ QgsField("speed", QVariant.Double)] )
-        att.append(self.speed)
-        a+=1
-
-        #string_ints = [str(int) for int in self.fixstatus ]
-        #feedback.pushInfo( ",".join(string_ints) )
+        att.append(self.speed) 
         pr.addAttributes( [ QgsField("fixstatus", QVariant.Double)] )
-        att.append(self.fixstatus)
-        a+=1
+        att.append(self.fixstatus) 
         pr.addAttributes( [ QgsField("datastatus", QVariant.Double)] )
-        att.append(self.datastatus)
-        a+=1
+        att.append(self.datastatus) 
+        pr.addAttributes( [ QgsField("message", QVariant.String)] )
+        att.append(self.message) 
 
-
+        nmealayer.updateFields()
 
         fett=[]
         for a,lat in enumerate(self.lat):

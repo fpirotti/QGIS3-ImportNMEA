@@ -36,4 +36,4 @@ def classFactory(iface):  # pylint: disable=invalid-name
     """
     #
     from .import_nmea import ImportNMEAPlugin
-    return ImportNMEAPlugin()
+    return ImportNMEAPlugin(iface)

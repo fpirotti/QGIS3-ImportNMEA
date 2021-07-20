@@ -34,7 +34,13 @@ import os
 import sys
 import inspect
 
+
+from qgis.PyQt.QtWidgets import QAction
+from qgis.PyQt.QtGui import QIcon
+ 
+
 from qgis.core import QgsProcessingAlgorithm, QgsApplication
+import processing
 from .import_nmea_provider import ImportNMEAProvider
 
 cmd_folder = os.path.split(inspect.getfile(inspect.currentframe()))[0]
@@ -45,8 +51,9 @@ if cmd_folder not in sys.path:
 
 class ImportNMEAPlugin(object):
 
-    def __init__(self):
+    def __init__(self, iface):
         self.provider = None
+        self.iface = iface
 
     def initProcessing(self):
         """Init Processing provider for QGIS >= 3.8."""
@@ -55,6 +62,24 @@ class ImportNMEAPlugin(object):
 
     def initGui(self):
         self.initProcessing()
+        icon = os.path.join(os.path.join(cmd_folder, 'logo.png'))
+        self.action = QAction(
+          QIcon(icon),
+          u"Import NMEA files", self.iface.mainWindow())
+        self.action.triggered.connect(self.run)
+        self.iface.addPluginToMenu(u"&ImportNMEA", self.action)
+        self.iface.addToolBarIcon(self.action)
 
-    def unload(self):
-        QgsApplication.processingRegistry().removeProvider(self.provider)
+
+
+    def unload(self):  
+        if self.provider is not None:
+            QgsApplication.processingRegistry().removeProvider(self.provider)
+
+        self.iface.removePluginMenu(u"&ImportNMEA", self.action)
+        self.iface.removeToolBarIcon(self.action)
+        #Spass
+
+    def run(self):
+        processing.execAlgorithmDialog("ImportNMEA:Import NMEA")
+ 
